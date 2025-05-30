@@ -1,0 +1,60 @@
+import numpy as np
+import pymc as pm
+from sklearn.preprocessing import OneHotEncoder
+
+def bayesian_multiclass_logistic_regression_posterior_predictive(
+    X_train,
+    y_train,
+    X_test,
+    draws=1000,
+    tune=1000,
+    chains=1,
+    random_seed=42,
+):
+    """
+    Bayesian multinomial logistic regression (softmax) with PyMC.
+    Returns posterior predictive probabilities for each class.
+    """
+    n_classes = len(np.unique(y_train))
+    n_features = X_train.shape[1]
+    y_train_oh = OneHotEncoder(sparse_output=False).fit_transform(y_train.reshape(-1, 1))
+    eps = 1e-8
+
+    with pm.Model() as model:
+        X_data = pm.MutableData("X_data", X_train)
+        coefs = pm.Normal('coefs', mu=0, sigma=1, shape=(n_features, n_classes))
+        intercept = pm.Normal('intercept', mu=0, sigma=1, shape=(n_classes,))
+        logits = pm.math.dot(X_data, coefs) + intercept
+        p = pm.Deterministic('p', pm.math.softmax(logits))
+        # Custom log-likelihood
+        logp = pm.math.log(p + eps)
+        ll = logp[np.arange(X_train.shape[0]), y_train].sum()
+        pm.Potential('likelihood', ll)
+        trace = pm.sample(
+            draws, tune=tune, chains=chains, random_seed=random_seed,
+            return_inferencedata=True, progressbar=True, cores=1,
+            init="adapt_diag"
+        )
+
+    # Posterior predictive for each test point
+    coefs_samples = trace.posterior['coefs'].values  # (chains, draws, n_features, n_classes)
+    intercept_samples = trace.posterior['intercept'].values  # (chains, draws, n_classes)
+    n_chains, n_draws = coefs_samples.shape[:2]
+    n_samples = n_chains * n_draws
+
+    coefs_samples = coefs_samples.reshape((n_samples, n_features, n_classes))
+    intercept_samples = intercept_samples.reshape((n_samples, n_classes))
+
+    p_pred_means = []
+    p_pred_stds = []
+    p_pred_samples = []
+
+    for x in X_test:
+        logits_pred = np.dot(x, coefs_samples) + intercept_samples  # (n_samples, n_classes)
+        p_pred = np.exp(logits_pred)
+        p_pred = p_pred / p_pred.sum(axis=1, keepdims=True)  # softmax
+        p_pred_means.append(p_pred.mean(axis=0))
+        p_pred_stds.append(p_pred.std(axis=0))
+        p_pred_samples.append(p_pred)
+    # p_pred_means: (n_test, n_classes), p_pred_stds: (n_test, n_classes), p_pred_samples: (n_test, n_samples, n_classes)
+    return np.array(p_pred_means), np.array(p_pred_stds), np.array(p_pred_samples), trace 
