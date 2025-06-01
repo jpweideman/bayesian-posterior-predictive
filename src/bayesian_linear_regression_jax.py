@@ -1,4 +1,4 @@
-import jax
+import bayesian_linear_regression_jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -25,7 +25,7 @@ def bayesian_linear_regression_posterior_predictive_jax(
         mu = a + jnp.dot(X, b)
         numpyro.sample('obs', dist.Normal(mu, sigma), obs=y)
 
-    rng_key = jax.random.PRNGKey(random_seed)
+    rng_key = bayesian_linear_regression_jax.random.PRNGKey(random_seed)
     nuts_kernel = NUTS(model)
     mcmc = MCMC(nuts_kernel, num_warmup=tune, num_samples=draws, num_chains=chains, progress_bar=True)
     mcmc.run(rng_key, X_train, y_train)
@@ -40,7 +40,7 @@ def bayesian_linear_regression_posterior_predictive_jax(
     y_pred_stds = y_pred_samples.std(axis=0)
 
     return y_pred_means, y_pred_stds, y_pred_samples, trace
-
+    
 # # Example usage:
 # if __name__ == "__main__":
 #     # Generate synthetic data

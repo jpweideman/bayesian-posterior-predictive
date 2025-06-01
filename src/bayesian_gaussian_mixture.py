@@ -1,5 +1,6 @@
 import numpy as np
 import pymc as pm
+from scipy.stats import norm
 
 
 def bayesian_gaussian_mixture_clustering(
@@ -43,3 +44,39 @@ def bayesian_gaussian_mixture_clustering(
     # Extract posterior samples of cluster assignments
     cluster_assignments = trace.posterior['category'].values  # shape: (chains, draws, n_samples)
     return trace, cluster_assignments 
+
+
+def posterior_predictive_cluster_assignment(trace, X_new):
+    """
+    Given a fitted trace and new data, compute the posterior predictive cluster assignment probabilities.
+
+    Args:
+        trace (arviz.InferenceData): PyMC trace object containing posterior samples
+        X_new (np.ndarray): New data points, shape (n_new, n_features)
+
+    Returns:
+        cluster_probs (np.ndarray): Posterior predictive probabilities for each new point and cluster,
+                                   shape (n_samples, n_new, n_components)
+    """
+    # Extract posterior samples
+    mus = trace.posterior['mus'].values  # shape: (chains, draws, n_components, n_features)
+    sigmas = trace.posterior['sigmas'].values  # shape: (chains, draws, n_components, n_features)
+    pis = trace.posterior['pi'].values  # shape: (chains, draws, n_components)
+    n_chains, n_draws, n_components, n_features = mus.shape
+    n_new = X_new.shape[0]
+    n_samples = n_chains * n_draws
+
+    # Reshape for easier iteration
+    mus = mus.reshape((n_samples, n_components, n_features))
+    sigmas = sigmas.reshape((n_samples, n_components, n_features))
+    pis = pis.reshape((n_samples, n_components))
+
+    cluster_probs = np.zeros((n_samples, n_new, n_components))
+
+    for s in range(n_samples):
+        for i in range(n_new):
+            # Compute likelihood for each cluster
+            likelihoods = np.prod(norm.pdf(X_new[i], loc=mus[s], scale=sigmas[s]), axis=1)
+            unnorm = pis[s] * likelihoods
+            cluster_probs[s, i, :] = unnorm / np.sum(unnorm)
+    return cluster_probs  # shape: (n_samples, n_new, n_components) 
