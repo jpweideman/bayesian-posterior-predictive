@@ -41,8 +41,8 @@ def bayesian_gaussian_mixture_clustering(
         # Likelihood
         obs = pm.Normal('obs', mu=mus[category], sigma=sigmas[category], observed=X)
         trace = pm.sample(draws, tune=tune, chains=chains, random_seed=random_seed, return_inferencedata=True, progressbar=True, cores=1, init="adapt_diag")
-    # Extract posterior samples of cluster assignments
-    cluster_assignments = trace.posterior['category'].values  # shape: (chains, draws, n_samples)
+    # Posterior samples of cluster assignments
+    cluster_assignments = trace.posterior['category'].values  
     return trace, cluster_assignments 
 
 
@@ -58,25 +58,37 @@ def posterior_predictive_cluster_assignment(trace, X_new):
         cluster_probs (np.ndarray): Posterior predictive probabilities for each new point and cluster,
                                    shape (n_samples, n_new, n_components)
     """
-    # Extract posterior samples
-    mus = trace.posterior['mus'].values  # shape: (chains, draws, n_components, n_features)
-    sigmas = trace.posterior['sigmas'].values  # shape: (chains, draws, n_components, n_features)
-    pis = trace.posterior['pi'].values  # shape: (chains, draws, n_components)
+    # posterior samples
+    mus = trace.posterior['mus'].values 
+    sigmas = trace.posterior['sigmas'].values 
+    pis = trace.posterior['pi'].values 
     n_chains, n_draws, n_components, n_features = mus.shape
     n_new = X_new.shape[0]
     n_samples = n_chains * n_draws
 
-    # Reshape for easier iteration
+    # Reshape 
     mus = mus.reshape((n_samples, n_components, n_features))
     sigmas = sigmas.reshape((n_samples, n_components, n_features))
     pis = pis.reshape((n_samples, n_components))
 
     cluster_probs = np.zeros((n_samples, n_new, n_components))
 
+    # Numerical stability: work in log-space and avoid zero sigmas
+    eps = 1e-8
+    sigmas = np.clip(sigmas, eps, None)
+
     for s in range(n_samples):
         for i in range(n_new):
-            # Compute likelihood for each cluster
-            likelihoods = np.prod(norm.pdf(X_new[i], loc=mus[s], scale=sigmas[s]), axis=1)
-            unnorm = pis[s] * likelihoods
-            cluster_probs[s, i, :] = unnorm / np.sum(unnorm)
-    return cluster_probs  # shape: (n_samples, n_new, n_components) 
+            # log-likelihood for each cluster (diagonal covariance => sum over features)
+            log_likelihoods = np.sum(norm.logpdf(X_new[i], loc=mus[s], scale=sigmas[s]), axis=1)
+            log_unnorm = np.log(pis[s] + eps) + log_likelihoods
+            # log-sum-exp normalization
+            log_unnorm -= np.max(log_unnorm)
+            probs = np.exp(log_unnorm)
+            probs_sum = np.sum(probs)
+            if probs_sum == 0 or not np.isfinite(probs_sum):
+                # fallback to uniform if numerical issues persist
+                cluster_probs[s, i, :] = np.ones(n_components) / n_components
+            else:
+                cluster_probs[s, i, :] = probs / probs_sum
+    return cluster_probs  
